@@ -17,10 +17,12 @@ from operator import itemgetter
 import matplotlib.pyplot as plt
 from imaging_behavior.core.slicer import BinarySlicer
 import pickle
+import tables as tb
+import pdb
 
 
 
-def parse_activity(jsonpath, savepath, jcampath, win=5, rew_win=30, min_epoch = 30, JCam_srate = 100):
+def parse_activity(jsonpath, savepath, jcampath, win=5, rew_win=30, min_epoch = 30, JCam_srate = 100, save=False):
 
 	"""  
 	win. win*2 used to calculate mean runnign speed
@@ -54,15 +56,17 @@ def parse_activity(jsonpath, savepath, jcampath, win=5, rew_win=30, min_epoch = 
 	inactive = inactive.astype('i2')
 
 	rew = session_jphys.reward_times
-	timeline_sec = np.arange(0, time_array_jphys.shape[0], srate)
-	    
+	timeline_sec = np.arange(0, time_array_jphys.shape[0], srate)	
+
 	rew_epochs = np.zeros(timeline_sec.shape, dtype=bool)
 	active=np.zeros(len(time_array_jphys))
 	for n,t in enumerate(timeline_sec): 
 	    val = [True for r in rew if r-rew_win < n < r+rew_win] # True if a reward occurs within rew_win of that second
+	    print len(val)
+	    pdb.set_trace()
 	    if val:
 	        rew_epochs[n] = True
-	        if t-srate/2 > 0:   
+	        if t-srate/2 > 0 and t+srate/2 < len(time_array_jphys):   
 	            active[(t-srate/2):(t+srate/2)] = np.ones(srate)
 	active = active.astype('i2')
 
@@ -97,14 +101,19 @@ def parse_activity(jsonpath, savepath, jcampath, win=5, rew_win=30, min_epoch = 
 	Jcam_active = Jcam_active.astype('int32')
 
 	# get number of JCam frames, truncate JPhys detected frames to match
-	frames = BinarySlicer(str(jcampath))
-	nframes = np.shape(frames)[0]
+	open_tb = tb.open_file(jcampath, 'r')
+    mov = open_tb.root.data
+	nframes = np.shape(mov)[0]
 	Jcam_active = Jcam_active[Jcam_active<nframes]
 	Jcam_inactive = Jcam_inactive[Jcam_inactive<nframes]
+
+	Jcam_other = np.arange(0, nframes, 1)
+	Jcam_other = set(list(Jcam_other)) - (set(list(Jcam_active)) + set(list(Jcam_inactive)))
 
 	print 'there were ' + str(len(Jcam_active)/JCam_srate) + ' seconds of activity'
 	print 'there were ' + str(len(Jcam_inactive)/JCam_srate) + ' seconds of inactivity in recording with the longest lasting ' + str(max(inactive_epochs)/srate) + ' seconds'
 
-	pickle.dump([Jcam_inactive, Jcam_active], open(savepath + '.pkl', 'w'))
+	if save==True:
+		pickle.dump([Jcam_inactive, Jcam_active], open(savepath + '.pkl', 'w'))
 
-	return Jcam_inactive, Jcam_active
+	return Jcam_inactive, Jcam_active, Jcam_other
