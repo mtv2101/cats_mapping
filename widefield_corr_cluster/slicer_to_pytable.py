@@ -9,7 +9,7 @@ from skimage.measure import block_reduce
 
 
 '''
-Jcam_decimate
+slicer_to_pytable
 mattv 10/20/2015
 '''
 
@@ -43,7 +43,9 @@ def slicer_to_pytable(input_file, save_path, desamp=1):
         
     # Create output file using a pytables compression array:  
     f = tb.open_file(output_path, mode = "w", title = "mov_h5")    
-    mov_h5 = f.create_carray(f.root, 'data', tb.UInt16Atom(), shape=(t,y/desamp,x/desamp))                                                                            
+    mov_h5 = f.create_carray(f.root, 'data', tb.UInt16Atom(), shape=(t,y/desamp,x/desamp))    
+
+    print 'saveing to ' + str(output_path)                                                                        
 
     if desamp == 1:
         start_time = timeit.default_timer()
@@ -61,6 +63,8 @@ def slicer_to_pytable(input_file, save_path, desamp=1):
         f.close()
         run_time = timeit.default_timer() - start_time
         print 'conversion and decimation took ' + str(run_time) + ' seconds'
+
+    return output_path
 
 
 def bin_ndarray(ndarray, new_shape, operation='sum'):

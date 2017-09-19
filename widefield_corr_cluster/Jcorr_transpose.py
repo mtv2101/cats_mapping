@@ -38,7 +38,7 @@ if platform.system() == 'Linux':
     import imaging_behavior
     from imaging_behavior.core.slicer import BinarySlicer
 else:
-    import imaging_behavior.core.tifffile as tiff
+    import aibs.CorticalMapping.tifffile as tiff
     
 import pdb
 
@@ -48,9 +48,6 @@ import pdb
 '''  '''
 '''  '''   
 '''  '''
-## TO DO
-## append to pytables EArray intead of saving to h5py array
-## 
    
    
    
@@ -101,19 +98,20 @@ class Jcorr(object):
                  savepath,
                  rsamp_factor,
                  dsfactor,
+                 absmaskpath = '',
                  frameNum = -1, 
                  window = 60,
                  lag = 0,
-                 exposure = 100, 
+                 exposure = 10, 
                  img_source = 'h5',
-                 do_corr = False,
+                 do_corr = True,
                  importmask = False, 
                  dff = True,
-                 SAVE_DFF = True,
+                 SAVE_DFF = False,
                  do_bandpass = False,
+                 do_bandcorr = True,
                  moving_dff = False, 
-                 special_string = '',
-                 transposed = True
+                 special_string = ''
                  ):
                  
         self.filepath = filepath       
@@ -129,18 +127,18 @@ class Jcorr(object):
         self.exposure = exposure
         self.img_source = img_source
         self.do_corr = do_corr
+        self.do_bandcorr = do_bandcorr
         self.importmask = importmask
         self.dff = dff        
         self.SAVE_DFF = SAVE_DFF
         self.do_bandpass = do_bandpass
         self.moving_dff = moving_dff
-        self.transposed = transposed
         
         self.timestamp_str = str(datetime.datetime.now()) # this may be added to save strings later
         self.special_string = special_string
 
-        self.maskname = 'mask_128.tif' # mask size should match the final size of the correlation matrix
-        self.absmaskpath = os.path.join(self.basepath, self.maskname) # only used if mask is pre-made in data folder
+        self.absmaskpath = absmaskpath
+        self.maskname = 'mask128.tif'
            
         self.mask, self.maskpath = Jcorr.load_mask(self)        
         self.masky = self.mask.shape[0]
@@ -325,14 +323,14 @@ class Jcorr(object):
         padsize = mov.shape[1] + (win*2) - 1
         mov_pad = np.zeros([padsize], dtype=('float32'))
         # pre-allocate the filtered matrix
-        mov_dff = np.zeros([len(self.pushmask), mov.shape[1]], dtype=('float32'))
+        mov_dff = np.zeros([mov.shape[0], mov.shape[1]], dtype=('float32'))
         # baseline subtract by gaussian convolution along time (dim=0) 
         print 'per-pixel baseline subtraction using gaussian convolution ...\n'
         print str(self.len_iter) + ' pixels'
         for n in range(self.len_iter):    
-            #print 'baseline subtraction pixel ' + str(n)
+            print 'baseline subtraction pixel ' + str(n)
             # put data in padded frame
-            mov_seg = np.squeeze(mov[self.pushmask[n],:])
+            mov_seg = np.squeeze(mov[n,:])
             mov_pad = Jcorr.pad_vector(self, mov_seg, win)
             # moving average by convolution
             mov_ave = sig.fftconvolve(mov_pad, kernal/kernal.sum(), mode='valid')
@@ -341,9 +339,9 @@ class Jcorr(object):
             mov_ave = mov_ave.astype('float32')
             # and now use moving average as f0 for df/f
             if self.dff:
-                mov_dff[n, :] = (mov_seg - mov_ave)/mov_ave
+                mov_dff[n, :] = (mov[n, :] - mov_ave)/mov_ave
             else:
-                mov_dff[n, :] = (mov_seg - mov_ave) 
+                mov_dff[n, :] = (mov[n, :] - mov_ave) 
 
         return mov_dff
     
@@ -368,14 +366,21 @@ class Jcorr(object):
         return lower_clim, upper_clim
         
     def rand_tsamp(self, mov):
-        r_subsamp = np.ceil(mov.shape[0]/self.rsamp_factor)
+        r_subsamp = np.ceil(mov.shape[1]/self.rsamp_factor)
         r_subsamp = r_subsamp.astype('uint16')
-        ridx = np.random.randint(0, mov.shape[0], r_subsamp)
-        if self.transposed:
-            mov = mov[:,ridx]
-        else:
-            mov = mov[ridx,:,:]
+        ridx = np.random.randint(0, mov.shape[1], r_subsamp)
+        mov = mov[:,ridx]
         return mov
+        
+    def get_seed_pixel_ts(self, lag, sliced_mov_dff, seed_idx): # 
+        if lag < 0: 
+            lag_abs = np.abs(lag)
+            seed_pixel_ts = np.pad(sliced_mov_dff[:-lag_abs, seed_idx], [lag_abs, 0], mode='median')
+        elif lag > 0:
+            seed_pixel_ts = np.pad(sliced_mov_dff[lag:, seed_idx], [0, lag], mode='median')
+        elif lag == 0:
+            seed_pixel_ts = sliced_mov_dff[seed_idx,:]
+        return seed_pixel_ts
     
     def FIR_bandpass(self, lowcut, highcut, fs, filt_length):
         nyq = 0.5 * fs
@@ -395,54 +400,35 @@ class Jcorr(object):
         return h
         
     def do_correlation(self, mov_dff):        
-
-        if self.transposed: # assume it is already masked
-            sliced_mov_dff = mov_dff
-            corr_constant = np.sqrt(np.sum(mov_dff*mov_dff,axis=1), dtype='float') 
-        else:
-            mov_dff = mov_dff.reshape([mov_dff.shape[0], mov_dff.shape[1]*mov_dff.shape[2]])          
-            sliced_mov_dff = mov_dff[:,self.pullmask] # pull just the pixels within the mask
-            corr_constant = np.sqrt(np.sum(sliced_mov_dff*sliced_mov_dff,axis=0), dtype='float') 
-        del mov_dff
         
-        start_time = timeit.default_timer()        
-        all_corr = np.zeros([self.len_iter, self.len_iter], dtype='float')               
-        all_corr = [Jcorr.corr_map(self, sliced_mov_dff, corr_constant, n, self.lag) for n in range(self.len_iter)] # do the correlation
-        all_corr = np.array(all_corr) #convert from list of arrays to 2-d numpy array       
+        start_time = timeit.default_timer()
+        
+        all_corr = np.zeros([self.len_iter, self.len_iter], dtype='float')
+        corr_constant = np.sqrt(np.sum(mov_dff*mov_dff,axis=1), dtype='float')   
+        cor = np.zeros([self.len_iter])
+        for n in range(mov_dff.shape[0]):
+            all_corr[n,:] = Jcorr.corr_map(self, mov_dff, corr_constant, n, cor) # do the correlation
+        all_corr = np.array(all_corr) #convert from list of arrays to 2-d numpy array
+       
         corr_time = timeit.default_timer() - start_time
         print 'correlation took ' + str(corr_time) + ' seconds\n'
         
         return all_corr
 
-    def corr_map(self, sliced_mov_dff, corr_constant, seed_idx, lag):        
-        seed_pixel_ts = Jcorr.get_seed_pixel_ts(self, lag, sliced_mov_dff, seed_idx)
+    def corr_map(self, sliced_mov_dff, corr_constant, seed_idx, cor): 
+        #pdb.set_trace()
+        seed_pixel_ts = sliced_mov_dff[seed_idx,:]
         # do cross-correlation of seed-pixel 
-        if self.transposed:
-            cor = (np.expand_dims(seed_pixel_ts, 0)*sliced_mov_dff).sum(axis=1)
-        else:
-            cor = (Jcorr.add_dims(self, seed_pixel_ts,sliced_mov_dff)*sliced_mov_dff).sum(axis=0)
+        cor = (seed_pixel_ts*sliced_mov_dff).sum(axis=1)
         cor = cor/corr_constant
         cor = np.squeeze(cor/np.sqrt(np.dot(seed_pixel_ts,seed_pixel_ts)))
 
-        idx = np.float(seed_idx)
-        progress = (idx/self.len_iter)*100.
-        #print '\rCorrelating: %' + str(progress)       
+        #idx = np.float(seed_idx)
+        #progress = (idx/self.len_iter)*100.
+        #print '\rCorrelating: %' + str(progress)
+       
         return cor
         
-    def get_seed_pixel_ts(self, lag, sliced_mov_dff, seed_idx): # 
-        if self.transposed:
-            seed_pixel_ts = sliced_mov_dff[seed_idx, :]
-        else:
-            if lag < 0: 
-                lag_abs = np.abs(lag)
-                seed_pixel_ts = np.pad(sliced_mov_dff[:-lag_abs, seed_idx], [lag_abs, 0], mode='median')
-            elif lag > 0:
-                seed_pixel_ts = np.pad(sliced_mov_dff[lag:, seed_idx], [0, lag], mode='median')
-            elif lag == 0:
-                seed_pixel_ts = sliced_mov_dff[:, seed_idx]
-
-        return seed_pixel_ts
-
     def save_corr(self, all_corr, path):
         output = h5py.File(path, 'w')
         output.create_dataset('all_corr', data=all_corr)
@@ -486,46 +472,45 @@ class Jcorr(object):
         return mov
      
     def load_mask(self):
-        ''' mask Jcam to isolate the brain from background '''
-        if self.importmask:
-            mask = tiff.imread(self.absmaskpath) # mask must be 8bit thresholded as 0 & 255
-            mask = mask/255
-            mask_savepath = self.absmaskpath
-        else: # create mask automatically from top %50 pixels in histogram
-            if self.img_source == 'npy': #cut off file extension
+       ''' mask Jcam to isolate the brain from background '''
+       if self.absmaskpath:
+           print 'loading mask from ' + str(self.absmaskpath)
+           mask = tiff.imread(self.absmaskpath) # mask must be 8bit thresholded as 0 & 255
+           mask = mask/255
+           mask_savepath = self.absmaskpath
+       else: # create mask automatically from top %50 pixels in histogram
+           if self.img_source == 'npy': #cut off file extension
                mask_savepath = os.path.join(self.savepath, self.filename[:-4]+ '_' + self.special_string + self.maskname)
-            else:
+           else:
                mask_savepath = os.path.join(self.savepath, self.filename+ '_' + self.special_string + self.maskname)
-            mask_mov = Jcorr.load_mov(self, frameNum=1)
-            if self.transposed:
-                frame = mask_mov[:,0].reshape([np.sqrt(mask_mov.shape[0]), np.sqrt(mask_mov.shape[0])])
-            else:
-                if len(np.shape(mask_mov)) == 2:
-                   frame = mask_mov[:,:]
-                else:
-                   frame = mask_mov[0,:,:]
-                if self.dsfactor != 1:
-                   frame =  block_reduce(frame, block_size=(self.dsfactor,self.dsfactor), func=np.mean)
-            del mask_mov    
-            mask = Jcorr.generate_mask(self, frame, 50)           
-            mask_tosave = mask.astype('uint8')
-            mask_tosave = mask_tosave*255 # for historical reasons, the mask is either 0 and 255
-            tiff.imsave(mask_savepath, mask_tosave)
-        return mask, mask_savepath
+               open_tb = tb.open_file(self.mask_moviepath, 'r')
+               mask_mov = open_tb.root.data
+           if len(np.shape(mask_mov)) == 2:
+               frame = mask_mov[:,:]
+           else:
+               frame = mask_mov[0,:,:]
+           if self.dsfactor != 1:
+               frame =  block_reduce(frame, block_size=(self.dsfactor,self.dsfactor), func=np.mean)
+           del mask_mov    
+           mask = Jcorr.generate_mask(self, frame, 50)           
+           #mask_tosave = mask.astype('uint8')
+           #mask_tosave = mask_tosave*255 # for historical reasons, the mask is either 0 and 255
+           #tiff.imsave(mask_savepath, mask_tosave)
+       return mask, mask_savepath
 
     def load_subsample_movie(self):    
         
         if self.dsfactor == 1:
             mov = Jcorr.load_mov(self, self.frameNum)
             if np.size(self.frameNum) == 1 and self.frameNum != -1: # i.e. frameNum = 1000, get first 1000 frames
-                mov = mov[:self.frameNum,:,:]
+                mov = mov[:,:self.frameNum]
             elif np.size(self.frameNum) > 1 or self.frameNum == -1: # if -1, or int array, do nothing
                 print 'loading whole time series'
                 pass
         else:
             mov =  Jcorr.load_mov(self, self.frameNum)
             if np.size(self.frameNum) == 1 and self.frameNum != -1: # i.e. frameNum = 1000, get first 1000 frames
-                mov = mov[:self.frameNum,:,:]
+                mov = mov[:,:self.frameNum]
                 mov = Jcorr.do_subsample(self, mov)                 # then downsample in space from the small array
             elif self.frameNum == -1 or np.size(self.frameNum) > 1: # if -1, or int array, do nothing
                 mov = Jcorr.do_subsample(self, mov)
@@ -543,71 +528,69 @@ class Jcorr(object):
             idx_gaps = self.frameNum - self.frameNum[0] # if index has gaps, ignore them for now, and cut them out after filtering
             idx_gaps = idx_gaps[:-1]
             print 'extracting ' + str(mov_idx.shape[0]) + ' frames for filtering'
-            mov = mov[mov_idx,:,:]
+            start_time = timeit.default_timer()
+            mov = mov[:, mov_idx] # converts to numpy array
+            load_time = timeit.default_timer() - start_time
+            print 'loading into numpy took ' + str(load_time) + ' seconds\n'
 
         # first highpass using gaussian filter before doing bandpass
         #print 'filtering with sliding gaussian ' + str(nn)
-        start_time = timeit.default_timer()
-        mov_dff = Jcorr.do_moving_dff(self, mov)
+        #start_time = timeit.default_timer()
+        #mov_dff = Jcorr.do_moving_dff(self, mov)
         #mov_dff = Jcorr.do_moving_dff_transpose(self, mov)
-        filt_time = timeit.default_timer() - start_time
-        print 'filter took ' + str(filt_time) + ' seconds\n'
-        del mov
-
-        # extract samples to be used for building correlation matrix
-        if np.size(self.frameNum) > 1: # now excise the gaps from the frame index
-            mov_dff_trunc = mov_dff[idx_gaps,:,:]
-            print 'extracting ' + str(mov_dff.shape[0]) + ' frames for correlation'
+        #filt_time = timeit.default_timer() - start_time
+        #print 'filter took ' + str(filt_time) + ' seconds\n'
+        #del mov
 
         # build corr matrix
         if self.do_corr:
-            all_corr = Jcorr.do_correlation(self, mov_dff_trunc)
+            # extract samples to be used for building correlation matrix
+            if np.size(self.frameNum) > 1: # now excise the gaps from the frame index
+                mov_dff_trunc = mov[:, idx_gaps]
+                print 'extracting ' + str(mov_dff_trunc.shape[1]) + ' frames for correlation'
+                all_corr = Jcorr.do_correlation(self, mov_dff_trunc)
+            else:
+                all_corr = Jcorr.do_correlation(self, mov)
     
-            corrsavepath = os.path.join(self.savepath,self.filename_short+'_cormap_'+self.filenamenote+self.timestamp_str[:10])
+            corrsavepath = os.path.join(self.savepath,self.filename_short+'_cormap_'+self.filenamenote)
             Jcorr.save_corr(self, all_corr, corrsavepath)
         else:
             all_corr = []
-
-        if self.SAVE_DFF:
-            dffsavepath = os.path.join(self.savepath, self.filename_short+ '_dff_' +self.filenamenote+ self.timestamp_str[:10])
-            np.save(dffsavepath, mov_dff_trunc)
-
-        del mov_dff_trunc
-        gc.collect()
     
         fs = 100.
-        bands = [[.1, .7, 2048], # low pass, highpass in Hz, filter length in samples  
-                [1, 7, 512]]  
+        bands = [[.1, .5, 2048], # low pass, highpass in Hz, filter length in samples  
+                [1, 5, 512]]  
         
         for nn, band in enumerate(bands):
             print 'filtering band ' + str(nn)
             start_time = timeit.default_timer()
-            mov_dff_bp = np.zeros(mov_dff.shape)
+            mov_dff_bp = np.zeros(mov.shape, dtype='float32') # suplicate mov in memory for bandpass array
             coeffs = Jcorr.FIR_bandpass(self, band[0], band[1], fs, band[2])
-            yidx = np.array(self.mask_idx[0])
-            xidx = np.array(self.mask_idx[1])
             for n in range(self.len_iter):
-                mov_dff_bp[:,yidx[n],xidx[n]] = sig.filtfilt(coeffs, 1, mov_dff[:,yidx[n],xidx[n]]) # use default pad values
+                #print n
+                 out = sig.filtfilt(coeffs, 1, mov[n,:]) # use default pad values
+                 out = np.float32(out)
+                 mov_dff_bp[n,:] = out
             corr_time = timeit.default_timer() - start_time
             print 'filter took ' + str(corr_time) + ' seconds\n'
 
             if np.size(self.frameNum) > 1: # now excise the gaps from the frame index
-                mov_dff_bp = mov_dff_bp[idx_gaps,:,:]
+                mov_dff_bp = mov_dff_bp[:, idx_gaps]
 
             bandpassnote = self.filenamenote + 'low' + str(band[0]) + '_high' + str(band[1]) + '_'        
             if self.SAVE_DFF:
                 #dffsavepath = os.path.join(self.savepath,self.filename_short+'_movie_'+self.filenamenote+bandpassnote+self.timestamp_str[:10])
-                dffsavepath = os.path.join(self.savepath, self.filename_short+bandpassnote + '_dff_'+self.timestamp_str[:10])
+                dffsavepath = os.path.join(self.savepath, self.filename_short+bandpassnote + 'dff')
                 np.save(dffsavepath, mov_dff_bp)
 
             if self.rsamp_factor != 1:    
-                mov_dff_trunc = Jcorr.rand_tsamp(self, mov_dff_bp)
+                mov_dff_bp = Jcorr.rand_tsamp(self, mov_dff_bp)
 
-            if self.do_corr:
+            if self.do_bandcorr:
                 # build corr matrix
                 all_corr = Jcorr.do_correlation(self, mov_dff_bp)
                 
-                corrsavepath = os.path.join(self.savepath,self.filename_short+bandpassnote+'_cormap_'+self.timestamp_str[:10])
+                corrsavepath = os.path.join(self.savepath,self.filename_short+bandpassnote+'cormap')
                 Jcorr.save_corr(self, all_corr, corrsavepath)
 
             del mov_dff_bp
@@ -618,43 +601,22 @@ class Jcorr(object):
         
         mov = Jcorr.load_subsample_movie(self)
 
-        print 'mov shape = ' + str(mov.shape)
-
-        if np.size(self.frameNum) > 1:
-            mov_idx = np.arange(self.frameNum[0], self.frameNum[-1])
-            idx_gaps = self.frameNum - self.frameNum[0]  # if index has gaps, ignore them for now, and cut them out after filtering
-            idx_gaps = idx_gaps[:-1]
-            if self.transposed:
-                mov = mov[:,mov_idx]
-            else:                
-                mov = mov[mov_idx,:,:]
-            print 'extracting ' + str(mov_idx.shape[0]) + ' frames for filtering'               
-
-        if self.moving_dff:
-            if self.transposed:
-                mov_dff = Jcorr.do_moving_dff_transpose(self, mov)
-            else:
-                mov_dff = Jcorr.do_moving_dff(self, mov)
-        else:
-            mov_dff = (mov - np.mean(mov, axis=0))/np.mean(mov, axis=0)
-        del mov
-
         if self.SAVE_DFF:
-            dffsavepath = os.path.join(self.savepath, self.filename_short+ '_dff_' +self.filenamenote+ self.timestamp_str[:10])
-            np.save(dffsavepath, mov_dff)
+            dffsavepath = os.path.join(self.savepath, self.filename_short+ '_dff_' +self.filenamenote)
+            np.save(dffsavepath, mov)
 
         #pdb.set_trace()
         if np.size(self.frameNum) > 1: # now excise the gaps from the frame index
-            mov_dff = mov_dff[idx_gaps,:,:]
-            print 'extracting ' + str(mov_dff.shape[0]) + ' frames for correlation'
+            mov = mov[:,self.frameNum]
+            print 'extracting ' + str(mov.shape[1]) + ' frames for correlation'
 
-        if self.rsamp_factor != 1:    
-            mov_dff = Jcorr.rand_tsamp(self, mov_dff)
+#        if self.rsamp_factor != 1:    
+#            mov = Jcorr.rand_tsamp(self, mov)
 
         if self.do_corr:
-            all_corr = Jcorr.do_correlation(self, mov_dff)
+            all_corr = Jcorr.do_correlation(self, mov)
             
-            corrsavepath = os.path.join(self.savepath,self.filename_short+'_cormap_'+self.filenamenote+self.timestamp_str[:10])
+            corrsavepath = os.path.join(self.savepath,self.filename_short+'_cormap_'+self.filenamenote)
             #corrsavepath = self.savepath + self.filenamenote + '_cormap_' + self.timestamp_str[:10]
             Jcorr.save_corr(self, all_corr, corrsavepath)
         else:
@@ -667,11 +629,11 @@ class Jcorr(object):
 if __name__ == "__main__":  
  
     #filepath = r'\\aibsdata2\nc-ophys\CorticalMapping\IntrinsicImageData\150731-M187476\010101JCamF102_16_16_1.npy'
-    filepath = r'\\aibsdata2\nc-ophys\CorticalMapping\IntrinsicImageData\160412-M210101-Retinotopy\160412JCamF101.dcimg_2_2_10.npy'    
-    savepath = r'\\aibsdata2\nc-ophys\CorticalMapping\IntrinsicImageData\160412-M210101-Retinotopy\corr'
+    filepath = r'F:\150729-M187476\010101JCamF102_16_16_1_64x64_detrend_transpose.h5'    
+    savepath = r'F:\150729-M187476'
     #savepath = r'\\aibsdata2\nc-ophys\CorticalMapping\IntrinsicImageData\150731-M187476'
 
     #Jcorr(filepath, savepath, rsamp_factor, dsfactor)    
-    corr = Jcorr(filepath,savepath, 10, 4, img_source='npy', importmask = True)
+    corr = Jcorr(filepath,savepath, 1, 1, moving_dff = False, do_corr=True)
        
     all_corr = corr.return_corr(corr)                                                                                              

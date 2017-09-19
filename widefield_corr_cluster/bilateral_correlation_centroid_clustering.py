@@ -59,7 +59,8 @@ class ccc(object): # correlate centroid clusters
                  corr_thresh = .8,
                  threshold_mult = 4.5, # multiple of mean corr to set as threshold 
                  eps=5,                                 # DBSCAN distance param
-                 min_samples=200,                       # DBSCAN density param       
+                 min_samples=200,                       # DBSCAN density param   
+                 patch_size_threshold=200,    
                  hdf5_format=True,
                  do_canny=False, 
                  do_watershed=False
@@ -73,6 +74,7 @@ class ccc(object): # correlate centroid clusters
        self.corr_thresh = corr_thresh
        self.eps = eps
        self.min_samples = min_samples
+       self.patch_size_threshold = patch_size_threshold
        self.hdf5_format = hdf5_format
        self.do_canny = do_canny
        self.do_watershed = do_watershed
@@ -205,7 +207,7 @@ class ccc(object): # correlate centroid clusters
                     current_patch = np.zeros(self.mask.shape)
                     current_patch[patch_array == jj] = 1 # make binary mask just from the patch
                     
-                    if np.sum(current_patch.flatten()) >= self.min_samples: # size filter 
+                    if np.sum(current_patch.flatten()) <= self.patch_size_threshold:  # size filter 
                         
                         if self.do_watershed:
                             distance = ndi.distance_transform_edt(current_patch)
@@ -452,11 +454,11 @@ def rgba_blend(img, c2, alpha):
 if __name__ == "__main__":
     
 
-    basepath = r'D:'
-    filename = r'D:\20160226JCamF101_8_8__cormap__tx100_sx1_nframes_all_dff_True2016-03-01'
-    maskname = r'D:\20160226JCamF101_8_8_1.h5_mask_256.tif'
+    basepath = r'\\aibsdata2\nc-ophys\CorticalMapping\IntrinsicImageData\160412-M210101-Retinotopy'
+    filename = r'\\aibsdata2\nc-ophys\CorticalMapping\IntrinsicImageData\160412-M210101-Retinotopy\corr\160412JCamF101.dcimg_2_2_10_cormap__tx10_sx4_nframes_all_dff_True2016-04-14'
+    maskname = r'\\aibsdata2\nc-ophys\CorticalMapping\IntrinsicImageData\160412-M210101-Retinotopy\mask_128.tif'
     
-    cc = ccc(basepath, filename, maskname, method='HDBSCAN', corr_thresh = .8, eps=1, min_samples=100)
+    cc = ccc(basepath, filename, maskname, method='HDBSCAN', corr_thresh = .8, eps=4, min_samples=100)
     
     area_masks = cc.get_area_masks(cc)
     

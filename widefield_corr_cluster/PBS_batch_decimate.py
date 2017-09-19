@@ -81,6 +81,15 @@ if __name__ == "__main__":
         r'/data/nc-ophys/CorticalMapping/IntrinsicImageData/150806-M187474/010101JCamF104_16_16_1.npy',
         r'/data/nc-ophys/CorticalMapping/IntrinsicImageData/150806-M187476/010101JCamF103_16_16_1.npy'
         ]
+
+    somemorepaths = ['/data/nc-ophys/CorticalMapping/IntrinsicImageData/150724-M187478/010101JCamF102_2_2_1.npy',
+      '/data/nc-ophys/CorticalMapping/IntrinsicImageData/150728-M187478/010101JCamF102_2_2_1.npy',
+      '/data/nc-ophys/CorticalMapping/IntrinsicImageData/150729-M187478/010101JCamF102_2_2_1.npy',
+      '/data/nc-ophys/CorticalMapping/IntrinsicImageData/150730-M187478/010101JCamF102_2_2_1.npy',
+      '/data/nc-ophys/CorticalMapping/IntrinsicImageData/150731-M187478/010101JCamF102_2_2_1.npy',
+      '/data/nc-ophys/CorticalMapping/IntrinsicImageData/150804-M187478/010101JCamF102_2_2_1.npy',
+      '/data/nc-ophys/CorticalMapping/IntrinsicImageData/150805-M187478/010101JCamF102_2_2_1.npy']
+
     
     id_tag = time.strftime("%Y%m%d-%H%M%S") # timestamp identifies the job
 
@@ -105,22 +114,23 @@ if __name__ == "__main__":
         file = open(shell_fpath, 'w+') 
         file.writelines( ['import sys\n' ,
                           'sys.path.append(r\'/data/nc-ophys/Matt/\')\n' ,
-                          'from aibs.CorticalMapping.widefield_corr_cluster.slicer_to_pytable import slicer_to_pytable as deci\n'
-                          'deci(\'' + path + '\', \'' + base_fpath + '\', 4)'                     
+                          'from aibs.CorticalMapping.widefield_corr_cluster.slicer_to_pytable import slicer_to_pytable as deci\n', 
+                          'deci(\'' + path + '\', \'' + base_fpath + '\', 4)',      
+                          #'print \'test\''               
                           ] )
         file.close()  
-        time.sleep(2.)
+        time.sleep(.5)
         
         jobname = 'Jcorr_batch_deci%d' % k
         file = open(jobname + '.sub', 'w+')
         file.writelines( [ '#!/bin/sh\n',
                            '#PBS -N %s\n' % jobname ,
                            '#PBS -o %s\n' % (base_fpath + '.out') ,
-                           '#PBS -q mindscope\n' ,
+                           '#PBS -q uno\n' ,
                            '#PBS -j oe\n' ,
                            '#PBS -l nodes=1:ppn=1\n' ,
-                           '#PBS -l walltime=6:00:00\n' ,
-                           '#PBS -l vmem=4g\n' ,
+                           '#PBS -l walltime=12:00:00\n' ,
+                           '#PBS -l vmem=8g\n' ,
                            '#PBS -m a\n' ,
                            '#PBS -r n\n' ,
                            'cd $PBS_O_WORKDIR\n' ,
@@ -131,6 +141,6 @@ if __name__ == "__main__":
     
         os.system('qsub %s' % (jobname + '.sub')) 
     
-        time.sleep(2.)
+        time.sleep(.5)
 
-    [run_jobs(path, k, id_tag) for k,path in enumerate(paths)]    
+    [run_jobs(path, k, id_tag) for k,path in enumerate(somemorepaths)]    
