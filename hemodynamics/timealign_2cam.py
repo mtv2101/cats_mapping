@@ -40,7 +40,7 @@ def import_jphys(jphyspath):
 	# assume mov2 contains two channels imaged 25Hz each 
 
 	JPhysFile = np.fromfile(jphyspath, dtype=np.dtype('>f4'), count=-1)
-	channelNum = 3
+	channelNum = 5
 	channelLength = len(JPhysFile) / channelNum
 	JPhysFile = JPhysFile.reshape([channelLength, channelNum])
 	print 'openend JPhys file ' + str(jphyspath)

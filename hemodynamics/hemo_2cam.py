@@ -62,7 +62,8 @@ class hemo_2cam(object):
 				reflect_path,
 				fluor_path,
 				jphys_path,
-				output_filename = False):
+				output_filename,
+				percentage = 65.0):
 
 		self.align_cam1_path = align_cam1_path
 		self.align_cam2_path = align_cam2_path
@@ -72,6 +73,7 @@ class hemo_2cam(object):
 		self.fluor_path = fluor_path
 		self.jphys_path = jphys_path
 		self.output_filename = output_filename
+		self.percentage = percentage
 
 	def load_h5(self, filepath):
 
@@ -89,7 +91,7 @@ class hemo_2cam(object):
 	    y1 = filtfilt(b, a, sig, axis=0)
 	    return y1
 
-	def make_mask(self, percentage=65.0):
+	def make_mask(self):
 		# mask fluorescence image using top "percentage" of pixels in raw brightness
 
 		open_calib_cam2 = tb.open_file(self.calib_cam2_path, 'r')
@@ -100,7 +102,7 @@ class hemo_2cam(object):
 		img_dims = img_to_mask.shape
 		bitdepth = 2**16
 		img_hist, img_bins = np.histogram(img_to_mask, bitdepth/100, [0,bitdepth])
-		background_proportion = (img_dims[0] * img_dims[1])/(100/percentage)
+		background_proportion = (img_dims[0] * img_dims[1])/(100/self.percentage)
 		cum = np.cumsum(img_hist)
 		idx = cum[cum<background_proportion].shape[0]
 		self.thresh = np.floor(img_bins[idx]).astype('uint16')
@@ -200,27 +202,23 @@ class hemo_2cam(object):
 		self.pushmask = np.ndarray.nonzero(self.pullmask) # indexes for within the mask 
 		self.pushmask = self.pushmask[0]
 
-	def mask_log_data(self):
+	def mask_data(self):
 
 		self.mask_to_index()
 
-		mov1_ds = np.zeros([self.mov1.shape[0], len(self.pushmask)]).astype('float64')
-		mov2_ds = np.zeros([self.mov2_ct.shape[0], len(self.pushmask)]).astype('float64')
-		mov3_ds = np.zeros([self.mov3_ct.shape[0], len(self.pushmask)]).astype('float64')
+		self.mov1_ds = np.zeros([self.mov1.shape[0], len(self.pushmask)]).astype('float64')
+		self.mov2_ds = np.zeros([self.mov2_ct.shape[0], len(self.pushmask)]).astype('float64')
+		self.mov3_ds = np.zeros([self.mov3_ct.shape[0], len(self.pushmask)]).astype('float64')
 
 		for n in range(len(self.pushmask)):
-		    mov1_ds[:,n] = self.mov1[:, self.mask_idx[0][n], self.mask_idx[1][n]]
-		    mov2_ds[:,n] = self.mov2_ct[:, self.mask_idx[0][n], self.mask_idx[1][n]]
-		    mov3_ds[:,n] = self.mov3_ct[:, self.mask_idx[0][n], self.mask_idx[1][n]]
-
-		self.mov1_log = np.log(mov1_ds/np.mean(mov1_ds, axis=0))
-		self.mov2_log = np.log(mov2_ds/np.mean(mov2_ds, axis=0))
-		self.mov3_log = np.log(mov3_ds/np.mean(mov3_ds, axis=0))
+		    self.mov1_ds[:,n] = self.mov1[:, self.mask_idx[0][n], self.mask_idx[1][n]]
+		    self.mov2_ds[:,n] = self.mov2_ct[:, self.mask_idx[0][n], self.mask_idx[1][n]]
+		    self.mov3_ds[:,n] = self.mov3_ct[:, self.mask_idx[0][n], self.mask_idx[1][n]]
 
 	def convert_units(self, mov):
 
 		# subtract sensor offset, divide by sensor gain to convert counts to photo-electrons
-		mov = (mov -100.0)/2.19
+		mov = (mov-100.0)/2.19
 		return mov
 
 	def package_data(self):
@@ -245,10 +243,10 @@ class hemo_2cam(object):
 		        jcamdata.append(frame[None])
 
 		# save masked JCam data (time, pixel)
-		group = fd.create_group("/", 'JCam_log_masked', 'channel')
+		group = fd.create_group("/", 'JCam_masked', 'channel')
 		data_names = ['Fluorescence', 'Reflectance_575nm', 'Reflectance_640nm']
 
-		for m,mov in enumerate([self.mov1_log, self.mov2_log, self.mov3_log]):
+		for m,mov in enumerate([self.mov1_ds, self.mov2_ds, self.mov3_ds]):
 
 		    jcamdata_log = fd.create_earray(group, 
 		                        data_names[m], 
@@ -277,20 +275,20 @@ class hemo_2cam(object):
 		        jcamdata_calib.append(frame[None])
 
 		# save JCam data before cross_talk correction(time, y, x)
-#		group = fd.create_group("/", 'JCam_pre_crosstalk', 'channel')
-#		data_names = ['Reflectance_575nm', 'Reflectance_640nm']
-#
-#		for m,mov in enumerate([self.mov2, self.mov3]):
-#
-#		    jcamdata_pre_ct = fd.create_earray(group, 
-#		                        data_names[m], 
-#		                        tb.UInt16Atom(), 
-#		                        expectedrows = int(mov.shape[0]),
-#		                        shape=(0, int(mov.shape[1]),int(mov.shape[2])))
-#
-#		    for n in range(mov.shape[0]):     
-#		        frame = mov[n,:,:]
-#		        jcamdata_pre_ct.append(frame[None])
+		group = fd.create_group("/", 'JCam_pre_crosstalk', 'channel')
+		data_names = ['Reflectance_575nm', 'Reflectance_640nm']
+
+		for m,mov in enumerate([self.mov2, self.mov3]):
+
+		    jcamdata_pre_ct = fd.create_earray(group, 
+		                        data_names[m], 
+		                        tb.UInt16Atom(), 
+		                        expectedrows = int(mov.shape[0]),
+		                        shape=(0, int(mov.shape[1]),int(mov.shape[2])))
+
+		    for n in range(mov.shape[0]):     
+		        frame = mov[n,:,:]
+		        jcamdata_pre_ct.append(frame[None])
 
 		# save JPhys data
 		jphysfile = np.fromfile(self.jphys_path, dtype=np.dtype('>f4'), count=-1)
@@ -354,8 +352,8 @@ class hemo_2cam(object):
 		self.mov2_ct = self.convert_units(self.mov2_ct)
 		self.mov3_ct = self.convert_units(self.mov3_ct)
 
-		# reshape movie to (time, pixel), subtract sensor offset (100 count), convert to photo-electrons, and log transform the mean-normalized movie
-		self.mask_log_data()
+		# reshape movie to (time, pixel) to fit mask
+		self.mask_data()
 
 		if self.output_filename:
 			self.package_data()
