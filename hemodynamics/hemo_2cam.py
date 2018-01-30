@@ -8,6 +8,7 @@ mattv@alleninstitute.org
 # core
 import os
 import imp
+import sys
 import time
 import timeit
 
@@ -27,11 +28,20 @@ from cats_mapping.hemodynamics import crosstalk_2cam as crosstalk
 from cats_mapping.hemodynamics.timealign_2cam import align_2cam as timealign
 import corticalmapping.core.ImageAnalysis as ia
 
+sys.path.append(r'\\allen\programs\braintv\workgroups\nc-ophys\Matt')
+sys.path.append(r'\\allen\programs\braintv\workgroups\nc-ophys\Matt\CorticalMapping')
+sys.path.append(r'\\allen\programs\braintv\workgroups\nc-ophys\Matt\aibs')
+sys.path.append(r'\\allen\programs\braintv\workgroups\nc-ophys\Matt\allensdk_internal')
+sys.path.append(r'\\allen\programs\braintv\workgroups\nc-ophys\Matt\imagingbehavior')
+sys.path.append(r'\\allen\programs\braintv\workgroups\nc-ophys\Matt\cats_mapping\hemodynamics\automaticCorticalMappingAlignment')
+
 # Chris M's package dependencies (for affine registration)
-os.chdir(r'\\allen\programs\braintv\workgroups\nc-ophys\test\automaticCorticalMappingAlignment')
-alignment_path = r'\\allen\programs\braintv\workgroups\nc-ophys\test\automaticCorticalMappingAlignment\alignmentWrapper.py'
-alignmentWrapper = imp.load_source('alignmentWrapper',alignment_path)
-fileTools = imp.load_source('alignmentFileTools',alignment_path)
+#os.chdir(r'\\allen\programs\braintv\workgroups\nc-ophys\test\automaticCorticalMappingAlignment')
+#alignment_path = r'\\allen\programs\braintv\workgroups\nc-ophys\test\automaticCorticalMappingAlignment\alignmentWrapper.py'
+#alignmentWrapper = imp.load_source('alignmentWrapper',alignment_path)
+import alignmentWrapper
+import alignmentFileTools as fileTools
+#fileTools = imp.load_source('alignmentFileTools',alignment_path)
 
 
 ##############################################
@@ -110,6 +120,20 @@ class hemo_2cam(object):
 		mask = np.zeros(img_dims).astype('uint16')
 		mask = mask.flatten()
 		mask[img_to_mask.flatten()>self.thresh] = 1
+		self.mask = mask.reshape(img_dims)
+
+	def make_mask_v2(self):
+		# Michael Moore's method
+
+		open_calib_cam2 = tb.open_file(self.calib_cam2_path, 'r')
+		self.calib_cam2 = open_calib_cam2.root.data
+		img_to_mask = self.calib_cam2[0,:,:]
+		img_dims = img_to_mask.shape
+		img_to_mask = img_to_mask.flatten().astype('float')
+		img_to_mask = (img_to_mask - np.min(img_to_mask)) / (np.max(img_to_mask) - np.min(img_to_mask))
+		self.thresh = 0.1 * np.max(img_to_mask)
+		mask = img_to_mask > (0.1 - np.min(img_to_mask))
+		mask.astype(int)
 		self.mask = mask.reshape(img_dims)
 
 	def correct_crosstalk(self):
@@ -215,6 +239,10 @@ class hemo_2cam(object):
 		    self.mov2_ds[:,n] = self.mov2_ct[:, self.mask_idx[0][n], self.mask_idx[1][n]]
 		    self.mov3_ds[:,n] = self.mov3_ct[:, self.mask_idx[0][n], self.mask_idx[1][n]]
 
+		self.mov1_ds = self.butter_lowpass(self.mov1_ds, 100.0, 5.0, order=5)
+		self.mov2_ds = self.butter_lowpass(self.mov2_ds, 100.0, 5.0, order=5)
+		self.mov3_ds = self.butter_lowpass(self.mov3_ds, 100.0, 5.0, order=5)
+
 	def convert_units(self, mov):
 
 		# subtract sensor offset, divide by sensor gain to convert counts to photo-electrons
@@ -242,8 +270,8 @@ class hemo_2cam(object):
 		        frame = mov[n,:,:]
 		        jcamdata.append(frame[None])
 
-		# save masked JCam data (time, pixel)
-		group = fd.create_group("/", 'JCam_masked', 'channel')
+		# save masked and filtered JCam data (time, pixel)
+		group = fd.create_group("/", 'JCam_masked_filtered', 'channel')
 		data_names = ['Fluorescence', 'Reflectance_575nm', 'Reflectance_640nm']
 
 		for m,mov in enumerate([self.mov1_ds, self.mov2_ds, self.mov3_ds]):
@@ -333,7 +361,7 @@ class hemo_2cam(object):
 
 	def run_2cam(self):
 
-		self.make_mask()
+		self.make_mask_v2()
 
 		# mov1 is fluorescence, mov2 and mov3 are two reflectance channels
 		self.mov1, self.mov2, self.mov3 = timealign(self.fluor_path, self.reflect_path, self.jphys_path)
