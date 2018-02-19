@@ -156,13 +156,13 @@ def decimate_JCamF(input_file, output_file=None,
     fd.close()
     
     
-spatial_compression = 1
-temporal_compression = 10
+spatial_compressions = [4,16]
+temporal_compression = 1
 transpose = False
 height = 2048
 width = 2048
 
-source = r"E:\170620-MTEST-DriftingGratingCircle"
+source = r"D:"
 JCamfiles = []
 #Get a list of all large jcam files
 # the size limitation will exclude single frame vascular images
