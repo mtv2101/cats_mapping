@@ -25,7 +25,8 @@ import cv2
 
 # package dependencies
 from cats_mapping.hemodynamics import crosstalk_2cam as crosstalk
-from cats_mapping.hemodynamics.timealign_2cam import align_2cam as timealign
+from cats_mapping.hemodynamics.timealign_2cam import align_2cam
+from cats_mapping.hemodynamics.timealign_2cam import align_blank_strobe
 import corticalmapping.core.ImageAnalysis as ia
 
 sys.path.append(r'\\allen\programs\braintv\workgroups\nc-ophys\Matt')
@@ -73,7 +74,8 @@ class hemo_2cam(object):
 				fluor_path,
 				jphys_path,
 				output_filename,
-				percentage = 65.0):
+				percentage = 65.0,
+				nchan = 3):
 
 		self.align_cam1_path = align_cam1_path
 		self.align_cam2_path = align_cam2_path
@@ -84,6 +86,7 @@ class hemo_2cam(object):
 		self.jphys_path = jphys_path
 		self.output_filename = output_filename
 		self.percentage = percentage
+		self.nchan = nchan
 
 	def load_h5(self, filepath):
 
@@ -135,6 +138,27 @@ class hemo_2cam(object):
 		mask = img_to_mask > (0.1 - np.min(img_to_mask))
 		mask.astype(int)
 		self.mask = mask.reshape(img_dims)
+
+	def correct_crosstalk_blankstrobe(self, filter_blank = True):
+
+		# cut trailing frames from reflectance camera
+		self.mov2 = self.mov2[:-6,:]
+		self.mov3 = self.mov3[:-6,:]
+		self.mov4 = self.mov4[:-6,:]
+
+		if filter_blank == True:
+			 self.mov4 = butter_lowpass(self.mov4, 99.92, 5.0, order=5)
+
+		if self.mov2.shape[0] != self.mov4.shape[0] | self.mov3.shape[0] != self.mov4.shape[0]:
+			print 'reflectance channel mismatch - check truncation of frames'
+			print '575nm reflectance = ' + str(self.mov2.shape[0]) + ' frames'
+			print '640nm reflectance = ' + str(self.mov3.shape[0]) + ' frames'
+			print 'blank channel = ' + str(self.mov4.shape[0]) + ' frames'
+
+		# subtract off the blank channel to correct crosstalk
+		self.mov2_ct -= self.mov4
+		self.mov3_ct -= self.mov4
+
 
 	def correct_crosstalk(self):
 		### calculate average coefficient of cross-talk, within the mask, of fluorescence detected by cam2 bleeding through to cam1 
@@ -333,23 +357,18 @@ class hemo_2cam(object):
 		            'mask', 
 		            self.mask) 
 
-		# save slope map
-		slopedata = fd.create_array(fd.root, 
-		            'slope_map', 
-		            self.slope_map) 
-
 		# save registration comparison
-		slopedata = fd.create_array(fd.root, 
+		abs_difference_image = fd.create_array(fd.root, 
 		            'abs_difference_image', 
 		            self.abs_difference_image)
 
 		# save registration SIFT vectors
-		slopedata = fd.create_array(fd.root, 
+		transform_image = fd.create_array(fd.root, 
 		            'transform_image', 
 		            self.transform_image)
 
 		# save intercept_map
-		slopedata = fd.create_array(fd.root, 
+		intercept_map = fd.create_array(fd.root, 
 		            'intercept_map', 
 		            self.intercept_map)
 
@@ -359,12 +378,36 @@ class hemo_2cam(object):
 
 		fd.close()
 
+	def run_2cam_blankstrobe(self):
+
+		self.make_mask_v2()
+
+		# mov1 is fluorescence, mov2,3,4 are reflectance channels
+		self.mov1, self.mov2, self.mov3, self.mov4 = align_blank_strobe(self.fluor_path, self.reflect_path, self.jphys_path, nchan=self.nchan)
+
+		self.calc_affine()
+
+		self.mov2 = self.do_space_transform(self.mov2)
+		self.mov3 = self.do_space_transform(self.mov3)
+		self.mov4 = self.do_space_transform(self.mov4)
+
+		self.correct_crosstalk_blankstrobe()
+
+		self.mov1 = self.convert_units(self.mov1)
+		self.mov2_ct = self.convert_units(self.mov2_ct)
+		self.mov3_ct = self.convert_units(self.mov3_ct)
+
+		self.mask_data()
+
+		if self.output_filename:
+			self.package_data()
+
 	def run_2cam(self):
 
 		self.make_mask_v2()
 
 		# mov1 is fluorescence, mov2 and mov3 are two reflectance channels
-		self.mov1, self.mov2, self.mov3 = timealign(self.fluor_path, self.reflect_path, self.jphys_path)
+		self.mov1, self.mov2, self.mov3 = align_2cam(self.fluor_path, self.reflect_path, self.jphys_path, nchan=self.nchan)
 
 		# calculate rigid spatial registration from calibration movies
 		self.calc_affine()

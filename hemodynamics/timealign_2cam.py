@@ -21,38 +21,35 @@ def import_movies(movpath1, movpath2, numframes=False):
 
 	print 'opening ' + str(movpath1)
 	open_mov1 = tb.open_file(movpath1, 'r')
-	mov1 = open_mov1.root.data
+	mov1 = np.copy(open_mov1.root.data)
 	print str(mov1.shape) + ' ' + str(mov1.dtype)
 
 	print 'opening ' + str(movpath2)
 	open_mov2 = tb.open_file(movpath2, 'r')
-	mov2 = open_mov2.root.data
+	mov2 = np.copy(open_mov2.root.data)
 	print str(mov2.shape) + ' ' + str(mov2.dtype)
 
 	if numframes:
 		mov1 = mov1[:numframes, :, :]
-		mov2 = mov2[:numframes/2, :, :]
+		mov2 = mov2[:numframes, :, :]
 
 	return mov1, mov2
 
-
-def import_jphys(jphyspath):
+def import_jphys(jphyspath, nchan):
 	# assume mov2 contains two channels imaged 25Hz each 
 
 	JPhysFile = np.fromfile(jphyspath, dtype=np.dtype('>f4'), count=-1)
-	channelNum = 5
-	channelLength = len(JPhysFile) / channelNum
-	JPhysFile = JPhysFile.reshape([channelLength, channelNum])
+	channelLength = len(JPhysFile) / nchan
+	JPhysFile = JPhysFile.reshape([channelLength, nchan])
 	print 'openend JPhys file ' + str(jphyspath)
 
 	# detrend JPhys traces (there are sometimes DC drift in these traces)
-	for n in range(channelNum):
+	for n in range(nchan):
 		xtrace = np.arange(0,JPhysFile[:, n].shape[0], 1)
 		slope, intercept, r_value, p_value, std_err = linregress(xtrace,JPhysFile[:, n])
 		JPhysFile[:,n] -= ((slope*xtrace)+intercept)
 
 	return JPhysFile
-
 
 def downsample_movie(mov, desamp):
 	start_time = timeit.default_timer()
@@ -67,6 +64,18 @@ def downsample_movie(mov, desamp):
 
 	return movds
 
+def vsync_timing_blank(jphys, thresh1, thresh2):
+	# crop movies from two cameras to approximately match.  Measure offset of start and stop times between the cameras.
+
+	vsync1 = jphys[:,1]
+	cam1_frames = [t for t,v in enumerate(vsync1) if v < thresh1 and vsync1[t-1] > thresh1][:-4]
+	print str(len(cam1_frames)) + ' vsyncs detected from reflectance camera'
+
+	vsync2 = jphys[:,2]
+	cam2_frames = [t for t,v in enumerate(vsync2) if v < thresh2 and vsync2[t-1] > thresh2][:-4]
+	print str(len(cam2_frames)) + ' vsyncs detected from fluorescence camera'
+
+	return cam1_frames, cam2_frames
 
 def vsync_timing(jphys, thresh1, thresh2):
 	# crop movies from two cameras to approximately match.  Measure offset of start and stop times between the cameras.
@@ -116,6 +125,40 @@ def butter_lowpass(sig, fs, corner, order=3):
 def resample(t,y,new_t):
     f = interp1d(t,y,axis=0,bounds_error=False,fill_value='extrapolate')
     return f(new_t)
+
+def interpolate_movies_blank(cam1, cam2, cam1_times, cam2_times):
+
+	mov1_575 = cam1[0::3,:,:]
+	mov1_640 = cam1[1::3,:,:]
+	mov1_ct = cam1[2::3,:,:]
+
+	xt1 = mov1_575.shape[0]
+	xt2 = mov1_640.shape[0]
+	xt3 = mov1_ct.shape[0]
+	xtr = np.min([xt1,xt2,xt3])
+
+	c1t = cam1_times[0::3][:xtr]
+	c2t = cam1_times[1::3][:xtr]
+	c3t = cam1_times[2::3][:xtr]
+
+	xtf = cam2.shape[0]
+	cam2_duration = cam2_times[-1] - cam2_times[0]
+	cam2_srate  = len(cam2_times) / (cam2_duration/10000.)
+	print 'fluorescence data (cam2) sampled at ' + str(cam2_srate) + 'Hz'
+
+	mov1_575_rs = np.zeros([xtf, cam1.shape[1], cam1.shape[2]])
+	mov1_640_rs = np.zeros([xtf, cam1.shape[1], cam1.shape[2]])
+	mov1_ct_rs = np.zeros([xtf, cam1.shape[1], cam1.shape[2]])
+
+	print 'interpolating backscatter movies to timebase of fluorescence movie ...'
+	for y in range(cam1.shape[1]):
+		for x in range(cam1.shape[2]):
+		    mov1_575_rs[:,y,x] = np.interp(cam2_times[:xtf], c1t, mov1_575[:xtr,y,x])
+		    mov1_640_rs[:,y,x] = np.interp(cam2_times[:xtf], c2t, mov1_640[:xtr,y,x])
+		    mov1_ct_rs[:,y,x] = np.interp(cam2_times[:xtf], c3t, mov1_ct[:xtr,y,x])
+	print 'interpolation complete'
+
+	return mov1_575_rs, mov1_640_rs, mov1_ct_rs
 
 def interpolate_movies(cam1, cam2, cam1_times, cam2_times, cam1_frames, filt):
 	# interpolate cam2 to cam1's timebase
@@ -216,13 +259,13 @@ def interpolate_movies(cam1, cam2, cam1_times, cam2_times, cam1_frames, filt):
 
 	return cam1_cropped, interp_cam2_chan1, interp_cam2_chan2
 
-def align_2cam(movpath1, movpath2, jphyspath, ycord=None, xcord=None, desamp=1, numframes=False, filt=False, thresh1=1.0, thresh2=1.0):
+def align_2cam(movpath1, movpath2, jphyspath, ycord=None, xcord=None, desamp=1, numframes=False, filt=False, thresh1=1.0, thresh2=1.0, nchan=3):
 	### mov1 is fluorescence, mov2 is reflectance
 	## THIS IS THE OPPOSITE OF CONVENTION IN HEMO_2CAM.PY!!!
 
 	mov1, mov2 = import_movies(movpath1, movpath2, numframes=numframes)
 
-	jphys = import_jphys(jphyspath)
+	jphys = import_jphys(jphyspath, nchan=nchan)
 
 	mov1_times, mov2_times, mov1_frames = vsync_timing(jphys, thresh1, thresh2)
 
@@ -240,3 +283,16 @@ def align_2cam(movpath1, movpath2, jphyspath, ycord=None, xcord=None, desamp=1, 
 		cam1, cam2_chan1, cam2_chan2 = interpolate_movies(mov1_ds, mov2_ds, mov1_times, mov2_times, mov1_frames, filt)
 
 	return cam1, cam2_chan1, cam2_chan2
+
+def align_blank_strobe(cam2path, cam1path, jphyspath, ycord=None, xcord=None, desamp=1, numframes=False, filt=False, thresh1=1.0, thresh2=1.0, nchan=3):
+	# cam1 is reflectance data, strobed between two colors and a blank frame
+
+	mov1, mov2 = import_movies(cam1path, cam2path, numframes=numframes)
+
+	jphys = import_jphys(jphyspath, nchan=nchan)
+
+	mov1_times, mov2_times = vsync_timing_blank(jphys, thresh1, thresh2)
+
+	mov1_chan1, mov1_chan2, mov1_blank = interpolate_movies_blank(mov1, mov2, mov1_times, mov2_times)
+
+	return mov2, mov1_chan1, mov1_chan2, mov1_blank
