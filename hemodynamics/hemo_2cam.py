@@ -27,13 +27,13 @@ import cv2
 from cats_mapping.hemodynamics import crosstalk_2cam as crosstalk
 from cats_mapping.hemodynamics.timealign_2cam import align_2cam
 from cats_mapping.hemodynamics.timealign_2cam import align_blank_strobe
-import corticalmapping.core.ImageAnalysis as ia
+#import corticalmapping.core.ImageAnalysis as ia
 
-sys.path.append(r'\\allen\programs\braintv\workgroups\nc-ophys\Matt')
-sys.path.append(r'\\allen\programs\braintv\workgroups\nc-ophys\Matt\CorticalMapping')
-sys.path.append(r'\\allen\programs\braintv\workgroups\nc-ophys\Matt\aibs')
-sys.path.append(r'\\allen\programs\braintv\workgroups\nc-ophys\Matt\allensdk_internal')
-sys.path.append(r'\\allen\programs\braintv\workgroups\nc-ophys\Matt\imagingbehavior')
+#sys.path.append(r'\\allen\programs\braintv\workgroups\nc-ophys\Matt')
+#sys.path.append(r'\\allen\programs\braintv\workgroups\nc-ophys\Matt\CorticalMapping')
+#sys.path.append(r'\\allen\programs\braintv\workgroups\nc-ophys\Matt\aibs')
+#sys.path.append(r'\\allen\programs\braintv\workgroups\nc-ophys\Matt\allensdk_internal')
+#sys.path.append(r'\\allen\programs\braintv\workgroups\nc-ophys\Matt\imagingbehavior')
 sys.path.append(r'\\allen\programs\braintv\workgroups\nc-ophys\Matt\cats_mapping\hemodynamics\automaticCorticalMappingAlignment')
 
 # Chris M's package dependencies (for affine registration)
@@ -52,8 +52,8 @@ class hemo_2cam(object):
 
 	"""
 	The hemo object has four video files:
-			1. calib_cam1: 470nm fluorescence calibration movie (<2min) captured on reflectance camera (cam1)  
-			2. calib_cam2: 470nm fluorescence calibration movie (<2min) captured on fluorescence camera (cam2)
+			1. align_cam1: high_rez movie captured on reflectance camera (cam1)  
+			2. align_cam2: high_rez movie captured on fluorescence camera (cam2)
 			3. reflect: 575nm / 640nm reflectance experimental movie camptured on reflectance camera (cam1)
 			4. fluor: 470 fluorescence experimental movie captured on fluorescence camera (cam2)
 
@@ -68,8 +68,6 @@ class hemo_2cam(object):
 	def __init__(self,
 				align_cam1_path,
 				align_cam2_path,
-				calib_cam1_path,
-				calib_cam2_path,
 				reflect_path,
 				fluor_path,
 				jphys_path,
@@ -79,8 +77,6 @@ class hemo_2cam(object):
 
 		self.align_cam1_path = align_cam1_path
 		self.align_cam2_path = align_cam2_path
-		self.calib_cam1_path = calib_cam1_path
-		self.calib_cam2_path = calib_cam2_path
 		self.reflect_path = reflect_path
 		self.fluor_path = fluor_path
 		self.jphys_path = jphys_path
@@ -107,7 +103,7 @@ class hemo_2cam(object):
 	def make_mask(self):
 		# mask fluorescence image using top "percentage" of pixels in raw brightness
 
-		open_calib_cam2 = tb.open_file(self.calib_cam2_path, 'r')
+		open_calib_cam2 = tb.open_file(self.fluor_path, 'r')
 		self.calib_cam2 = open_calib_cam2.root.data
 		img_to_mask = self.calib_cam2[0,:,:]
 		img_to_mask = img_to_mask.astype('uint16')
@@ -128,7 +124,7 @@ class hemo_2cam(object):
 	def make_mask_v2(self):
 		# Michael Moore's method
 
-		open_calib_cam2 = tb.open_file(self.calib_cam2_path, 'r')
+		open_calib_cam2 = tb.open_file(self.fluor_path, 'r')
 		self.calib_cam2 = open_calib_cam2.root.data
 		img_to_mask = self.calib_cam2[0,:,:]
 		img_dims = img_to_mask.shape
@@ -147,7 +143,7 @@ class hemo_2cam(object):
 		self.mov4 = self.mov4[:-6,:]
 
 		if filter_blank == True:
-			 self.mov4 = butter_lowpass(self.mov4, 99.92, 5.0, order=5)
+			 self.mov4 = self.butter_lowpass(self.mov4, 99.92, 5.0, order=5)
 
 		if self.mov2.shape[0] != self.mov4.shape[0] | self.mov3.shape[0] != self.mov4.shape[0]:
 			print 'reflectance channel mismatch - check truncation of frames'
@@ -156,15 +152,15 @@ class hemo_2cam(object):
 			print 'blank channel = ' + str(self.mov4.shape[0]) + ' frames'
 
 		# subtract off the blank channel to correct crosstalk
-		self.mov2_ct -= self.mov4
-		self.mov3_ct -= self.mov4
+		self.mov2_ct = self.mov2 - self.mov4
+		self.mov3_ct = self.mov3 - self.mov4
 
 
 	def correct_crosstalk(self):
 		### calculate average coefficient of cross-talk, within the mask, of fluorescence detected by cam2 bleeding through to cam1 
 
-		temp = self.load_h5(self.calib_cam1_path)
-		self.calib_cam2 = self.load_h5(self.calib_cam2_path)
+		temp = self.load_h5(self.reflect_path)
+		self.calib_cam2 = self.load_h5(self.fluor_path)
 
 		self.calib_cam1 = self.do_space_transform(temp)
 
@@ -273,7 +269,7 @@ class hemo_2cam(object):
 		mov = (mov-100.0)/2.19
 		return mov
 
-	def package_data(self):
+	def package_data(self, output='blankstrobe'):
 
 		fd = tb.open_file(self.output_filename, 'w')
 		filters = tb.Filters(complevel=1, complib='blosc')
@@ -311,46 +307,66 @@ class hemo_2cam(object):
 		        jcamdata_log.append(frame[None])
 
 		# save spatially aligned calibration JCam data (time, y, x)
-		group = fd.create_group("/", 'spatially_aligned_calibration_data', 'channel')
-		data_names = ['calib_cam1', 'calib_cam2']
+		if output=='blankstrobe':
+			group = fd.create_group("/", 'blank_frame', 'channel')
+			data_name = 'mov4'
+			mov = self.mov4
 
-		for m,mov in enumerate([self.calib_cam1, self.calib_cam2]):
+			jcamdata_calib = fd.create_earray(group,
+			                    data_name,
+			                    tb.Float64Atom(), 
+			                    expectedrows = int(mov.shape[0]),
+			                    shape=(0, int(mov.shape[1]),int(mov.shape[2])))
 
-		    jcamdata_calib = fd.create_earray(group, 
-		                        data_names[m], 
-		                        tb.Float64Atom(), 
-		                        expectedrows = int(mov.shape[0]),
-		                        shape=(0, int(mov.shape[1]),int(mov.shape[2])))
+			for n in range(mov.shape[0]):     
+			    frame = mov[n,:,:]
+			    jcamdata_calib.append(frame[None])
 
-		    for n in range(mov.shape[0]):     
-		        frame = mov[n,:,:]
-		        jcamdata_calib.append(frame[None])
+			sync_start_end = fd.create_array(fd.root, 
+					'sync_start_end', 
+					self.sync_start_end)
+
+		elif output=='2strobe':
+			group = fd.create_group("/", 'spatially_aligned_calibration_data', 'channel')
+			data_names = ['calib_cam1', 'calib_cam2']
+
+			for m,mov in enumerate([self.calib_cam1, self.calib_cam2]):
+
+				jcamdata_calib = fd.create_earray(group,
+				                data_names[m],
+				                tb.Float64Atom(), 
+				                expectedrows = int(mov.shape[0]),
+				                shape=(0, int(mov.shape[1]),int(mov.shape[2])))
+
+				for n in range(mov.shape[0]):     
+					frame = mov[n,:,:]
+					jcamdata_calib.append(frame[None])
 
 		# save JCam data before cross_talk correction(time, y, x)
-		group = fd.create_group("/", 'JCam_pre_crosstalk', 'channel')
-		data_names = ['Reflectance_575nm', 'Reflectance_640nm']
+		# group = fd.create_group("/", 'JCam_pre_crosstalk', 'channel')
+		# data_names = ['Reflectance_575nm', 'Reflectance_640nm']
 
-		for m,mov in enumerate([self.mov2, self.mov3]):
+		# for m,mov in enumerate([self.mov2, self.mov3]):
 
-		    jcamdata_pre_ct = fd.create_earray(group, 
-		                        data_names[m], 
-		                        tb.UInt16Atom(), 
-		                        expectedrows = int(mov.shape[0]),
-		                        shape=(0, int(mov.shape[1]),int(mov.shape[2])))
+		#     jcamdata_pre_ct = fd.create_earray(group, 
+		#                         data_names[m], 
+		#                         tb.UInt16Atom(), 
+		#                         expectedrows = int(mov.shape[0]),
+		#                         shape=(0, int(mov.shape[1]),int(mov.shape[2])))
 
-		    for n in range(mov.shape[0]):     
-		        frame = mov[n,:,:]
-		        jcamdata_pre_ct.append(frame[None])
+		#     for n in range(mov.shape[0]):     
+		#         frame = mov[n,:,:]
+		#         jcamdata_pre_ct.append(frame[None])
 
-		# save JPhys data
-		jphysfile = np.fromfile(self.jphys_path, dtype=np.dtype('>f4'), count=-1)
-		channelNum = 3
-		channelLength = len(jphysfile) / channelNum
-		jphysfile = jphysfile.reshape([channelLength, channelNum])
-		basepath, jphys_name = os.path.split(self.jphys_path)
-		jphysdata = fd.create_array(fd.root,                     
-		                'jphys', 
-		                jphysfile) 
+		# # save JPhys data
+		# jphysfile = np.fromfile(self.jphys_path, dtype=np.dtype('>f4'), count=-1)
+		# channelNum = 3
+		# channelLength = len(jphysfile) / channelNum
+		# jphysfile = jphysfile.reshape([channelLength, channelNum])
+		# basepath, jphys_name = os.path.split(self.jphys_path)
+		# jphysdata = fd.create_array(fd.root,                     
+		#                 'jphys', 
+		#                 jphysfile) 
 
 		# save mask data
 		maskdata = fd.create_array(fd.root, 
@@ -368,13 +384,14 @@ class hemo_2cam(object):
 		            self.transform_image)
 
 		# save intercept_map
-		intercept_map = fd.create_array(fd.root, 
-		            'intercept_map', 
-		            self.intercept_map)
+		if output=='2strobe':
+			intercept_map = fd.create_array(fd.root, 
+			            'intercept_map', 
+			            self.intercept_map)
 
-		affine_matrix = fd.create_array(fd.root,
-					'affine_matrix', 
-					self.affine_matrix)
+			affine_matrix = fd.create_array(fd.root,
+						'affine_matrix', 
+						self.affine_matrix)
 
 		fd.close()
 
@@ -383,7 +400,7 @@ class hemo_2cam(object):
 		self.make_mask_v2()
 
 		# mov1 is fluorescence, mov2,3,4 are reflectance channels
-		self.mov1, self.mov2, self.mov3, self.mov4 = align_blank_strobe(self.fluor_path, self.reflect_path, self.jphys_path, nchan=self.nchan)
+		self.mov1, self.mov2, self.mov3, self.mov4, self.sync_start_end = align_blank_strobe(self.fluor_path, self.reflect_path, self.jphys_path, nchan=self.nchan)
 
 		self.calc_affine()
 
@@ -400,7 +417,7 @@ class hemo_2cam(object):
 		self.mask_data()
 
 		if self.output_filename:
-			self.package_data()
+			self.package_data(output='blankstrobe')
 
 	def run_2cam(self):
 
@@ -427,7 +444,7 @@ class hemo_2cam(object):
 		self.mask_data()
 
 		if self.output_filename:
-			self.package_data()
+			self.package_data(output='2strobe')
 
 
 if __name__ == '__main__':

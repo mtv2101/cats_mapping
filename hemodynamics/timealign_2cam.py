@@ -137,28 +137,48 @@ def interpolate_movies_blank(cam1, cam2, cam1_times, cam2_times):
 	xt3 = mov1_ct.shape[0]
 	xtr = np.min([xt1,xt2,xt3])
 
-	c1t = cam1_times[0::3][:xtr]
-	c2t = cam1_times[1::3][:xtr]
-	c3t = cam1_times[2::3][:xtr]
+	c1t = cam1_times[0::3]
+	c2t = cam1_times[1::3]
+	c3t = cam1_times[2::3]
+
+	start1 = (np.abs(np.array(cam2_times)-c1t[0])).argmin()
+	start2 = (np.abs(np.array(cam2_times)-c2t[0])).argmin()
+	start3 = (np.abs(np.array(cam2_times)-c3t[0])).argmin()
+
+	end1 = (np.abs(np.array(cam2_times)-c1t[-1])).argmin()
+	end2 = (np.abs(np.array(cam2_times)-c2t[-1])).argmin()
+	end3 = (np.abs(np.array(cam2_times)-c3t[-1])).argmin()
 
 	xtf = cam2.shape[0]
 	cam2_duration = cam2_times[-1] - cam2_times[0]
 	cam2_srate  = len(cam2_times) / (cam2_duration/10000.)
 	print 'fluorescence data (cam2) sampled at ' + str(cam2_srate) + 'Hz'
 
-	mov1_575_rs = np.zeros([xtf, cam1.shape[1], cam1.shape[2]])
-	mov1_640_rs = np.zeros([xtf, cam1.shape[1], cam1.shape[2]])
-	mov1_ct_rs = np.zeros([xtf, cam1.shape[1], cam1.shape[2]])
+	mov1_575_rs = np.zeros([end1-start1, cam1.shape[1], cam1.shape[2]])
+	mov1_640_rs = np.zeros([end2-start2, cam1.shape[1], cam1.shape[2]])
+	mov1_ct_rs = np.zeros([end3-start3, cam1.shape[1], cam1.shape[2]])
+
+	sync_start_end = [[start1, start2, start3], [end1, end2, end3]]
 
 	print 'interpolating backscatter movies to timebase of fluorescence movie ...'
+	print 'cam2_times = ' + str(len(cam2_times[:xtf]))
+	#print 'len c1t = ' + str(len(c1t))
+	#print 'len c2t = ' + str(len(c2t))
+	#print 'len c3t = ' + str(len(c3t))
+	#print 'num cam1 frames to get = ' + str(xtr)
+
 	for y in range(cam1.shape[1]):
 		for x in range(cam1.shape[2]):
-		    mov1_575_rs[:,y,x] = np.interp(cam2_times[:xtf], c1t, mov1_575[:xtr,y,x])
-		    mov1_640_rs[:,y,x] = np.interp(cam2_times[:xtf], c2t, mov1_640[:xtr,y,x])
-		    mov1_ct_rs[:,y,x] = np.interp(cam2_times[:xtf], c3t, mov1_ct[:xtr,y,x])
-	print 'interpolation complete'
+		    mov1_575_rs[:,y,x] = np.interp(cam2_times[start1:end1], c1t, mov1_575[:xtr,y,x])
+		    mov1_640_rs[:,y,x] = np.interp(cam2_times[start2:end2], c2t, mov1_640[:xtr,y,x])
+		    mov1_ct_rs[:,y,x] = np.interp(cam2_times[start3:end3], c3t, mov1_ct[:xtr,y,x])
 
-	return mov1_575_rs, mov1_640_rs, mov1_ct_rs
+	print 'interpolation complete'
+	print 'len mov1_575_rs = ' + str(mov1_575_rs.shape[0])
+	print 'len mov1_640_rs = ' + str(mov1_640_rs.shape[0])
+	print 'len mov1_ct_rs = ' + str(mov1_ct_rs.shape[0])
+
+	return mov1_575_rs, mov1_640_rs, mov1_ct_rs, sync_start_end
 
 def interpolate_movies(cam1, cam2, cam1_times, cam2_times, cam1_frames, filt):
 	# interpolate cam2 to cam1's timebase
@@ -293,6 +313,6 @@ def align_blank_strobe(cam2path, cam1path, jphyspath, ycord=None, xcord=None, de
 
 	mov1_times, mov2_times = vsync_timing_blank(jphys, thresh1, thresh2)
 
-	mov1_chan1, mov1_chan2, mov1_blank = interpolate_movies_blank(mov1, mov2, mov1_times, mov2_times)
+	mov1_chan1, mov1_chan2, mov1_blank = interpolate_movies_blank(mov1, mov2, mov1_times, mov2_times, sync_start_end)
 
-	return mov2, mov1_chan1, mov1_chan2, mov1_blank
+	return mov2, mov1_chan1, mov1_chan2, mov1_blank, sync_start_end
