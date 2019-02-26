@@ -132,14 +132,18 @@ def interpolate_movies_blank(cam1, cam2, cam1_times, cam2_times):
 	mov1_640 = cam1[1::3,:,:]
 	mov1_ct = cam1[2::3,:,:]
 
-	xt1 = mov1_575.shape[0]
-	xt2 = mov1_640.shape[0]
-	xt3 = mov1_ct.shape[0]
-	xtr = np.min([xt1,xt2,xt3])
+	#xt1 = mov1_575.shape[0]
+	#xt2 = mov1_640.shape[0]
+	#xt3 = mov1_ct.shape[0]
+	#xtr = np.min([xt1,xt2,xt3])
 
 	c1t = cam1_times[0::3]
 	c2t = cam1_times[1::3]
 	c3t = cam1_times[2::3]
+	xtr = np.min([len(c1t),len(c2t),len(c3t)])
+	c1t = c1t[:xtr]
+	c2t = c2t[:xtr]
+	c3t = c3t[:xtr]
 
 	start1 = (np.abs(np.array(cam2_times)-c1t[0])).argmin()
 	start2 = (np.abs(np.array(cam2_times)-c2t[0])).argmin()
@@ -161,11 +165,8 @@ def interpolate_movies_blank(cam1, cam2, cam1_times, cam2_times):
 	sync_start_end = [[start1, start2, start3], [end1, end2, end3]]
 
 	print 'interpolating backscatter movies to timebase of fluorescence movie ...'
-	print 'cam2_times = ' + str(len(cam2_times[:xtf]))
-	#print 'len c1t = ' + str(len(c1t))
-	#print 'len c2t = ' + str(len(c2t))
-	#print 'len c3t = ' + str(len(c3t))
-	#print 'num cam1 frames to get = ' + str(xtr)
+	print 'length backscatter data used: ' + str(xtr)
+	print 'fluorescence movie length: ' + str(len(cam2_times[start3:end3]))
 
 	for y in range(cam1.shape[1]):
 		for x in range(cam1.shape[2]):
@@ -313,6 +314,6 @@ def align_blank_strobe(cam2path, cam1path, jphyspath, ycord=None, xcord=None, de
 
 	mov1_times, mov2_times = vsync_timing_blank(jphys, thresh1, thresh2)
 
-	mov1_chan1, mov1_chan2, mov1_blank = interpolate_movies_blank(mov1, mov2, mov1_times, mov2_times, sync_start_end)
+	mov1_chan1, mov1_chan2, mov1_blank, sync_start_end = interpolate_movies_blank(mov1, mov2, mov1_times, mov2_times)
 
 	return mov2, mov1_chan1, mov1_chan2, mov1_blank, sync_start_end

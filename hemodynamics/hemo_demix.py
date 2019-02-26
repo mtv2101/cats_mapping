@@ -102,7 +102,7 @@ class hemo_demix(object):
         path_530 = 0.27
         path_575 = 0.28
         path_640 = 3.85
-        demixed_beers = self.beers_demixing(self.mov1, self.mov2, self.mov3, path_470, path_530, path_575, path_640, smooth=True)          
+        demixed_beers = self.beers_demixing(self.mov1, self.mov2, self.mov3, path_470, path_530, path_575, path_640, smooth=False)          
 
         return demixed_beers
 
